@@ -9,21 +9,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.grapevine.grapevine.matrix.LoginState
 import com.grapevine.grapevine.matrix.MatrixViewModel
 
 @Composable
-fun LoginScreen(viewModel: MatrixViewModel, onLoginSuccess: () -> Unit) {
+fun LoginScreen(viewModel: MatrixViewModel) {
     var homeserver by remember { mutableStateOf("matrix.org") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
-    val state by viewModel.state.collectAsState()
+    // collectAsState() converts a StateFlow into Compose State.
+    // The UI recomposes automatically whenever loginState emits a new value.
+    val loginState by viewModel.loginState.collectAsState()
 
-    LaunchedEffect(state.isLoggedIn) {
-        if (state.isLoggedIn) {
-            onLoginSuccess()
-        }
-    }
+    val isLoading = loginState is LoginState.Loading
+    val errorMessage = (loginState as? LoginState.Error)?.message
 
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -36,12 +36,21 @@ fun LoginScreen(viewModel: MatrixViewModel, onLoginSuccess: () -> Unit) {
             color = MaterialTheme.colorScheme.primary
         )
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Decentralized messaging",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
         Spacer(modifier = Modifier.height(48.dp))
 
         OutlinedTextField(
             value = homeserver,
             onValueChange = { homeserver = it },
             label = { Text("Homeserver") },
+            placeholder = { Text("matrix.org") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -52,6 +61,7 @@ fun LoginScreen(viewModel: MatrixViewModel, onLoginSuccess: () -> Unit) {
             value = username,
             onValueChange = { username = it },
             label = { Text("Username") },
+            placeholder = { Text("@you:matrix.org  or just  you") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -72,28 +82,37 @@ fun LoginScreen(viewModel: MatrixViewModel, onLoginSuccess: () -> Unit) {
 
         Button(
             onClick = { viewModel.login(homeserver, username, password) },
-            enabled = !state.isLoading && username.isNotBlank() && password.isNotBlank(),
+            enabled = !isLoading && username.isNotBlank() && password.isNotBlank(),
             modifier = Modifier.fillMaxWidth()
         ) {
-            if (state.isLoading) {
+            if (isLoading) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
-                    color = MaterialTheme.colorScheme.onPrimary
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    strokeWidth = 2.dp
                 )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Connecting…")
             } else {
                 Text("Login")
             }
         }
 
-        state.error?.let {
-            error -> Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium
-            )
+        errorMessage?.let { error ->
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
         }
-
     }
-
 }

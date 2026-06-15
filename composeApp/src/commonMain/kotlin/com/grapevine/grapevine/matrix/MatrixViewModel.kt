@@ -5,61 +5,92 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-
-data class MatrixState(
-    val isLoggedIn: Boolean = false,
-    val isLoading: Boolean = false,
-    val error: String? = null,
-    val userId: String? = null,
-    val rooms: List<RoomInfo> = emptyList()
-)
+import net.folivo.trixnity.client.store.Room
+import net.folivo.trixnity.core.model.RoomId
 
 data class RoomInfo(
-    val id: String,
+    val id: RoomId,
     val name: String?,
     val topic: String?,
-    val memberCount: Int
+    val memberCount: Int,
+    val lastMessage: String? = null,
+)
+
+data class MessageInfo(
+    val eventId: String,
+    val senderId: String,
+    val body: String,
+    val timestamp: Long,
 )
 
 class MatrixViewModel : ViewModel() {
-    private val _state = MutableStateFlow(MatrixState())
-    val state: StateFlow<MatrixState> = _state.asStateFlow()
 
-    fun login(
-        homeserver: String,
-        username: String,
-        password: String
-    ) {
+    private val matrixClient = GrapevineMatrixClient(viewModelScope)
+
+    val loginState: StateFlow<LoginState> = matrixClient.loginState
+
+    private val _rooms = MutableStateFlow<List<RoomInfo>>(emptyList())
+    val rooms: StateFlow<List<RoomInfo>> = _rooms.asStateFlow()
+
+    private val _messages = MutableStateFlow<List<MessageInfo>>(emptyList())
+    val messages: StateFlow<List<MessageInfo>> = _messages.asStateFlow()
+
+    private val _currentRoomId = MutableStateFlow<RoomId?>(null)
+    val currentRoomId: StateFlow<RoomId?> = _currentRoomId.asStateFlow()
+
+    init {
         viewModelScope.launch {
-            _state.value = _state.value.copy(isLoading = true, error = null)
-
-            try {
-                //  TODO: actual matrix login implementation with Trixnity sdk
-                delay(1000)
-                _state.value = _state.value.copy(
-                    isLoggedIn = true,
-                    isLoading = false,
-                    userId = "@$username:$homeserver",
-                    rooms = getMockRooms()
-                )
-            } catch (e: Exception) {
-                _state.value = _state.value.copy(
-                    isLoading = false,
-                    error = e.message ?: "Login Failed"
-                )
+            loginState.collectLatest { state ->
+                if (state is LoginState.LoggedIn) collectRooms()
+                else _rooms.value = emptyList()
             }
         }
     }
 
-    fun logout() { _state.value = MatrixState() }
+    fun login(homeserver: String, username: String, password: String) {
+        viewModelScope.launch {
+            matrixClient.login(homeserver, username, password)
+        }
+    }
 
-    private fun getMockRooms(): List<RoomInfo> = listOf(
-        RoomInfo("!room1:matrix.org", "General Chat", "General discussion room", 42),
-        RoomInfo("!room2:matrix.org", "Random", "Random stuff", 15),
-        RoomInfo("!room3:matrix.org", "Development", "Kotlin Multiplatform chat", 8)
-    )
+    fun logout() {
+        _rooms.value = emptyList()
+        _messages.value = emptyList()
+        _currentRoomId.value = null
+        viewModelScope.launch { matrixClient.logout() }
+    }
 
-    fun clearError() { _state.value = _state.value.copy(error = null) }
+    fun openRoom(roomId: RoomId) {
+        _currentRoomId.value = roomId
+        _messages.value = emptyList()
+        viewModelScope.launch {
+            _messages.value = matrixClient.getMessages(roomId)
+        }
+    }
+
+    // Called by the UI's send button — also refreshes messages after sending.
+    fun sendMessage(text: String) {
+        val roomId = _currentRoomId.value ?: return
+        viewModelScope.launch {
+            matrixClient.sendMessage(roomId, text)
+            // Re-fetch after sending so the new message appears immediately.
+            _messages.value = matrixClient.getMessages(roomId)
+        }
+    }
+
+    private suspend fun collectRooms() {
+        matrixClient.roomsFlow().collect { roomList ->
+            _rooms.value = roomList.map { it.toRoomInfo() }
+        }
+    }
 }
+
+// Extension function: adds .toRoomInfo() to Trixnity's Room type without modifying it.
+private fun Room.toRoomInfo() = RoomInfo(
+    id = roomId,
+    name = name?.explicitName,
+    topic = null,       // topic lives in room state events, not the Room summary
+    memberCount = 0,    // member count requires fetching membership state separately
+)
