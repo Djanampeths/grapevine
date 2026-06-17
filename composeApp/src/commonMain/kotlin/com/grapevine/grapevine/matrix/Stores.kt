@@ -1,6 +1,9 @@
 package com.grapevine.grapevine.matrix
 
+import net.folivo.trixnity.client.media.MediaStore
+import net.folivo.trixnity.client.store.repository.createInMemoryRepositoriesModule
 import org.koin.core.module.Module
 
-expect suspend fun createRepositoriesModule(): Module
-expect fun createMediaStoreModule(): Module
+fun createRepositoriesModule(): Module = createInMemoryRepositoriesModule()
+
+expect fun createMediaStore(): MediaStore

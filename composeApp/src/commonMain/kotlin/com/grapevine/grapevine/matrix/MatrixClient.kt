@@ -37,8 +37,8 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
                 identifier = IdentifierType.User(username),
                 password = password,
                 repositoriesModule = createRepositoriesModule(),
-                mediaStoreModule = createMediaStoreModule(),
-                coroutineContext = scope.coroutineContext,
+                mediaStore = createMediaStore(),
+                scope = scope,
             ).getOrThrow()
 
             client = newClient
@@ -48,7 +48,6 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
         }
     }
 
-    // flatMapLatest is experimental in some coroutines versions — opt-in required.
     @OptIn(ExperimentalCoroutinesApi::class)
     fun roomsFlow(): Flow<List<Room>> {
         val c = client ?: return flowOf(emptyList())
@@ -62,35 +61,25 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
         }
     }
 
-    // Use the REST API directly to send a message.
-    // `api.room` (not `api.rooms`) is the current name in Trixnity 3.6.
     suspend fun sendMessage(roomId: RoomId, text: String) {
-        client?.api?.room?.sendMessageEvent(
+        client?.api?.rooms?.sendMessageEvent(
             roomId = roomId,
-            eventContent = RoomMessageEventContent.TextBased.Text(body = text),
+            eventContent = RoomMessageEventContent.TextMessageEventContent(body = text),
             txnId = "gv-${System.currentTimeMillis()}",
         )
     }
 
-    // `getTimelineEvents` on the room service is an internal sync method.
-    // The correct public API for reading message history is `api.room.getEvents`,
-    // which makes a direct paginated REST call to the homeserver.
     suspend fun getMessages(roomId: RoomId): List<MessageInfo> {
-        // getEvents returns Result<GetEvents.Response> — unwrap with getOrNull().
-        // `from` is non-null in Trixnity 3.6; pass "" to get the latest chunk.
-        val response = client?.api?.room?.getEvents(
+        val response = client?.api?.rooms?.getEvents(
             roomId = roomId,
             from = "",
             dir = GetEvents.Direction.BACKWARDS,
             limit = 50,
         )?.getOrNull() ?: return emptyList()
 
-        // REST API events are ClientEvent<*> where the id field is `eventId` (not `id`).
         return response.chunk.orEmpty()
             .mapNotNull { event ->
-                // content is a direct field in Trixnity's REST response model, not Result-wrapped.
-                // `as?` is a safe cast — returns null instead of throwing if the type doesn't match.
-                val content = event.content as? RoomMessageEventContent.TextBased.Text
+                val content = event.content as? RoomMessageEventContent.TextMessageEventContent
                     ?: return@mapNotNull null
                 MessageInfo(
                     eventId = event.id.full,

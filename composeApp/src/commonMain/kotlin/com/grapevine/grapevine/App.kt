@@ -51,7 +51,10 @@ fun App() {
         is Screen.Chat -> ChatScreen(
             viewModel = viewModel,
             roomName = s.roomName,
-            onBack = { screen = Screen.RoomList }
+            onBack = {
+                viewModel.stopPolling()
+                screen = Screen.RoomList
+            }
         )
     }
 }
