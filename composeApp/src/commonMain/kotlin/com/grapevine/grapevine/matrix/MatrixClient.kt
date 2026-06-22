@@ -3,13 +3,16 @@ package com.grapevine.grapevine.matrix
 import io.ktor.http.Url
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.datetime.Clock
 import net.folivo.trixnity.client.MatrixClient
@@ -21,12 +24,15 @@ import net.folivo.trixnity.client.store.AccountStore
 import net.folivo.trixnity.client.store.Room
 import net.folivo.trixnity.client.store.TimelineEvent
 import net.folivo.trixnity.clientserverapi.model.authentication.IdentifierType
+import net.folivo.trixnity.clientserverapi.model.rooms.CreateRoom
+import net.folivo.trixnity.clientserverapi.model.rooms.DirectoryVisibility
 import net.folivo.trixnity.core.model.EventId
+import net.folivo.trixnity.core.model.RoomAliasId
 import net.folivo.trixnity.core.model.RoomId
 import net.folivo.trixnity.core.model.events.Event
+import net.folivo.trixnity.core.model.events.RelatesTo
 import net.folivo.trixnity.core.model.events.m.room.MemberEventContent
 import net.folivo.trixnity.core.model.events.m.room.RoomMessageEventContent
-import net.folivo.trixnity.core.model.events.m.room.TopicEventContent
 
 class GrapevineMatrixClient(private val scope: CoroutineScope) {
 
@@ -35,6 +41,8 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
 
     private val _loginState = MutableStateFlow<LoginState>(LoginState.LoggedOut)
     val loginState: StateFlow<LoginState> = _loginState.asStateFlow()
+
+    // ── Session ──────────────────────────────────────────────────────────────
 
     suspend fun tryRestoreSession() {
         _loginState.value = LoginState.Loading
@@ -71,9 +79,8 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
                 repositoriesModule = createRepositoriesModule(),
                 mediaStore = createMediaStore(),
                 scope = scope,
-                initialDeviceDisplayName = "Grapevine Desktop",
+                initialDeviceDisplayName = "Grapevine",
             ).getOrThrow()
-
             client = newClient
             baseHttpUrl = serverUrl.toString().trimEnd('/')
             scope.launch { newClient.startSync() }
@@ -83,29 +90,74 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun roomsWithDetailsFlow(): Flow<List<RoomInfo>> {
-        val c = client ?: return flowOf(emptyList())
-        return c.room.getAll().flatMapLatest { roomMap ->
-            if (roomMap.isEmpty()) {
-                flowOf(emptyList())
-            } else {
-                val roomInfoFlows: List<Flow<RoomInfo?>> = roomMap.map { (roomId, roomFlow) ->
-                    combine(
-                        roomFlow,
-                        c.room.getState(roomId, "", TopicEventContent::class),
-                        c.room.getAllState(roomId, MemberEventContent::class),
-                    ) { room, topicEvent, memberMap ->
-                        room?.toRoomInfo(
-                            topic = topicEvent?.content?.topic,
-                            memberCount = memberMap?.size ?: 0,
-                        )
-                    }
-                }
-                combine(roomInfoFlows) { it.filterNotNull().toList() }
+    suspend fun logout() {
+        client?.cancelSync(false)
+        client = null
+        baseHttpUrl = ""
+        _loginState.value = LoginState.LoggedOut
+    }
+
+    // ── Rooms ─────────────────────────────────────────────────────────────────
+
+    fun roomsWithDetailsFlow(): Flow<List<RoomInfo>> = flow {
+        val c = client ?: run { emit(emptyList()); return@flow }
+        val allRooms = c.room.getAll()
+        // Collect every time the room map changes (rooms added/removed),
+        // and also poll periodically to catch unread-count / name updates.
+        var lastMap: Map<*, *> = emptyMap<Any, Any>()
+        while (true) {
+            val roomMap = allRooms.value
+            val rooms = roomMap.values.mapNotNull { roomFlow -> roomFlow.value?.toRoomInfo() }
+            // Only emit when something actually changed to avoid spurious recompositions.
+            if (roomMap !== lastMap) {
+                lastMap = roomMap
+                emit(rooms)
             }
+            delay(1_500)
         }
     }
+
+    suspend fun joinRoom(roomId: RoomId) {
+        client?.api?.rooms?.joinRoom(roomId = roomId)
+    }
+
+    suspend fun joinRoomByAlias(alias: String) {
+        val aliasId = RoomAliasId(if (alias.startsWith("#")) alias else "#$alias")
+        client?.api?.rooms?.joinRoom(roomAliasId = aliasId)
+    }
+
+    suspend fun createRoom(name: String, topic: String) {
+        client?.api?.rooms?.createRoom(
+            visibility = DirectoryVisibility.PRIVATE,
+            name = name.ifBlank { null },
+            topic = topic.ifBlank { null },
+            preset = CreateRoom.Request.Preset.PRIVATE,
+        )
+    }
+
+    suspend fun leaveRoom(roomId: RoomId) {
+        client?.api?.rooms?.leaveRoom(roomId = roomId)
+    }
+
+    // ── Room members ──────────────────────────────────────────────────────────
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun roomMembersFlow(roomId: RoomId): Flow<List<MemberInfo>> {
+        val c = client ?: return flowOf(emptyList())
+        return c.room.getAllState(roomId, MemberEventContent::class)
+            .map { memberMap ->
+                memberMap?.entries?.mapNotNull { (userId, event) ->
+                    val content = event?.content ?: return@mapNotNull null
+                    MemberInfo(
+                        userId = "@$userId",
+                        displayName = content.displayName,
+                        avatarUrl = content.avatarUrl?.let { mxcToHttp(it) },
+                    )
+                } ?: emptyList()
+            }
+    }
+
+    // ── Messages ──────────────────────────────────────────────────────────────
 
     @OptIn(ExperimentalCoroutinesApi::class)
     fun messagesFlow(roomId: RoomId, countFlow: StateFlow<Int>): Flow<List<MessageInfo>> {
@@ -124,7 +176,40 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
         client?.api?.rooms?.sendMessageEvent(
             roomId = roomId,
             eventContent = RoomMessageEventContent.TextMessageEventContent(body = text),
-            txnId = "gv-${Clock.System.now().toEpochMilliseconds()}",
+            txnId = txnId(),
+        )
+    }
+
+    suspend fun sendReply(roomId: RoomId, replyToEventId: EventId, text: String) {
+        client?.api?.rooms?.sendMessageEvent(
+            roomId = roomId,
+            eventContent = RoomMessageEventContent.TextMessageEventContent(
+                body = text,
+                relatesTo = RelatesTo.Reply(RelatesTo.ReplyTo(replyToEventId)),
+            ),
+            txnId = txnId(),
+        )
+    }
+
+    suspend fun editMessage(roomId: RoomId, eventId: EventId, newText: String) {
+        client?.api?.rooms?.sendMessageEvent(
+            roomId = roomId,
+            eventContent = RoomMessageEventContent.TextMessageEventContent(
+                body = "* $newText",
+                relatesTo = RelatesTo.Replace(
+                    eventId = eventId,
+                    newContent = RoomMessageEventContent.TextMessageEventContent(body = newText),
+                ),
+            ),
+            txnId = txnId(),
+        )
+    }
+
+    suspend fun deleteMessage(roomId: RoomId, eventId: EventId) {
+        client?.api?.rooms?.redactEvent(
+            roomId = roomId,
+            eventId = eventId,
+            txnId = txnId(),
         )
     }
 
@@ -136,19 +221,38 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
         )
     }
 
-    suspend fun logout() {
-        client?.cancelSync(false)
-        client = null
-        baseHttpUrl = ""
-        _loginState.value = LoginState.LoggedOut
+    // ── Typing ────────────────────────────────────────────────────────────────
+
+    fun typingUsersFlow(roomId: RoomId): Flow<List<String>> {
+        val c = client ?: return flowOf(emptyList())
+        val myUserId = c.userId.full
+        return c.room.usersTyping
+            .map { map ->
+                map[roomId]?.users
+                    ?.map { it.full }
+                    ?.filter { it != myUserId }
+                    ?: emptyList()
+            }
     }
 
-    // Converts mxc://server/mediaId → https://homeserver/_matrix/media/v3/download/server/mediaId
-    private fun mxcToHttp(mxcUri: String): String? {
-        if (!mxcUri.startsWith("mxc://")) return null
-        val path = mxcUri.removePrefix("mxc://")
-        return "$baseHttpUrl/_matrix/media/v3/download/$path"
+    suspend fun setTyping(roomId: RoomId, isTyping: Boolean) {
+        val c = client ?: return
+        c.api.rooms.setTyping(
+            roomId = roomId,
+            userId = c.userId,
+            typing = isTyping,
+            timeout = if (isTyping) 30_000L else null,
+        )
     }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fun mxcToHttp(mxcUri: String): String? {
+        if (!mxcUri.startsWith("mxc://")) return null
+        return "$baseHttpUrl/_matrix/media/v3/download/${mxcUri.removePrefix("mxc://")}"
+    }
+
+    private fun txnId() = "gv-${Clock.System.now().toEpochMilliseconds()}"
 
     private fun TimelineEvent.toMessageInfo(): MessageInfo? {
         val msgEvent = event as? Event.MessageEvent<*> ?: return null
@@ -158,6 +262,8 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
             senderId = msgEvent.sender.full,
             body = content.body,
             timestamp = msgEvent.originTimestamp,
+            replyToEventId = (content.relatesTo as? RelatesTo.Reply)
+                ?.replyTo?.eventId?.full,
         )
         return when (content) {
             is RoomMessageEventContent.TextMessageEventContent,
@@ -171,7 +277,6 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
                 mimeType = content.info?.mimeType,
                 fileSize = content.info?.size,
             )
-
             is RoomMessageEventContent.FileMessageEventContent -> base.copy(
                 type = MessageType.File,
                 mediaUrl = content.url?.let { mxcToHttp(it) },
@@ -179,7 +284,6 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
                 mimeType = content.info?.mimeType,
                 fileSize = content.info?.size,
             )
-
             is RoomMessageEventContent.AudioMessageEventContent -> base.copy(
                 type = MessageType.Audio,
                 mediaUrl = content.url?.let { mxcToHttp(it) },
@@ -187,7 +291,6 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
                 mimeType = content.info?.mimeType,
                 fileSize = content.info?.size,
             )
-
             is RoomMessageEventContent.VideoMessageEventContent -> base.copy(
                 type = MessageType.Video,
                 mediaUrl = content.url?.let { mxcToHttp(it) },
@@ -195,18 +298,18 @@ class GrapevineMatrixClient(private val scope: CoroutineScope) {
                 mimeType = content.info?.mimeType,
                 fileSize = content.info?.size,
             )
-
-            else -> null // drop verification requests and other non-chat events
+            else -> null
         }
     }
 }
 
-internal fun Room.toRoomInfo(topic: String?, memberCount: Int) = RoomInfo(
+internal fun Room.toRoomInfo() = RoomInfo(
     id = roomId,
     name = name?.explicitName,
-    topic = topic,
-    memberCount = memberCount,
+    topic = null,
+    memberCount = 0,
     unreadCount = unreadMessageCount,
+    isDirect = isDirect,
 )
 
 sealed class LoginState {

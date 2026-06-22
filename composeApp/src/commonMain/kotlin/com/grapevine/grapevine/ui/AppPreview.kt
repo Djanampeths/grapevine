@@ -89,7 +89,14 @@ private fun PreviewBubbles() {
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         fakeMessages.forEach { msg ->
-            MessageBubble(message = msg, isOwnMessage = msg.senderId == "@me:m.org")
+            MessageBubble(
+                message = msg,
+                isOwnMessage = msg.senderId == "@me:m.org",
+                replySource = null,
+                onReply = {},
+                onEdit = null,
+                onDelete = null,
+            )
         }
     }
 }

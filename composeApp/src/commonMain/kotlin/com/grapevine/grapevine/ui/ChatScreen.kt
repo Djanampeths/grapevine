@@ -1,5 +1,7 @@
 package com.grapevine.grapevine.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,14 +22,22 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.BrokenImage
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,7 +50,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +59,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.LocalPlatformContext
 import coil3.compose.SubcomposeAsyncImage
@@ -70,33 +81,40 @@ import kotlinx.datetime.toLocalDateTime
 fun ChatScreen(
     viewModel: MatrixViewModel,
     roomName: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenInfo: () -> Unit,
 ) {
-    val messages by viewModel.messages.collectAsState()
-    val isLoading by viewModel.isLoadingMessages.collectAsState()
-    val error by viewModel.messageError.collectAsState()
-    val loginState by viewModel.loginState.collectAsState()
-    val messageCount by viewModel.messageCount.collectAsState()
+    val messages      by viewModel.messages.collectAsState()
+    val isLoading     by viewModel.isLoadingMessages.collectAsState()
+    val error         by viewModel.messageError.collectAsState()
+    val loginState    by viewModel.loginState.collectAsState()
+    val messageCount  by viewModel.messageCount.collectAsState()
+    val replyingTo    by viewModel.replyingTo.collectAsState()
+    val typingUsers   by viewModel.typingUsers.collectAsState()
     val currentUserId = (loginState as? LoginState.LoggedIn)?.userId
 
     var inputText by remember { mutableStateOf("") }
+    var editingMessage by remember { mutableStateOf<MessageInfo?>(null) }
     val listState = rememberLazyListState()
 
-    // Auto-scroll to bottom only when a new message arrives (not when loading more old ones)
+    // Scroll to bottom when a new message from the bottom arrives
     val latestId = messages.lastOrNull()?.eventId
     LaunchedEffect(latestId) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
 
-    // Load more when user scrolls to the very top
+    // Trigger load-more when scrolled to the top
     LaunchedEffect(listState) {
         snapshotFlow { listState.firstVisibleItemIndex }
             .distinctUntilChanged()
             .collect { index ->
-                if (index == 0 && messages.size >= messageCount) {
-                    viewModel.loadMoreMessages()
-                }
+                if (index == 0 && messages.size >= messageCount) viewModel.loadMoreMessages()
             }
+    }
+
+    // Populate input when editing
+    LaunchedEffect(editingMessage) {
+        inputText = editingMessage?.body ?: ""
     }
 
     Scaffold(
@@ -107,28 +125,72 @@ fun ChatScreen(
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    IconButton(onClick = onOpenInfo) {
+                        Icon(Icons.Default.Info, contentDescription = "Room info")
+                    }
                 }
             )
         },
         bottomBar = {
-            MessageInput(
-                text = inputText,
-                onTextChange = { inputText = it },
-                onSend = {
-                    if (inputText.isNotBlank()) {
-                        viewModel.sendMessage(inputText.trim())
-                        inputText = ""
+            Column {
+                // Typing indicator
+                if (typingUsers.isNotEmpty()) {
+                    val label = when (typingUsers.size) {
+                        1 -> "${typingUsers[0].removePrefix("@").substringBefore(":")} is typing…"
+                        2 -> "${typingUsers[0].removePrefix("@").substringBefore(":")} and ${typingUsers[1].removePrefix("@").substringBefore(":")} are typing…"
+                        else -> "Several people are typing…"
                     }
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontStyle = FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
+                    )
                 }
-            )
+                // Reply / edit preview bar
+                if (replyingTo != null || editingMessage != null) {
+                    ReplyEditBar(
+                        replyingTo = replyingTo,
+                        editingMessage = editingMessage,
+                        onDismiss = {
+                            viewModel.setReplyingTo(null)
+                            editingMessage = null
+                            inputText = ""
+                        }
+                    )
+                }
+                MessageInput(
+                    text = inputText,
+                    onTextChange = { text ->
+                        inputText = text
+                        viewModel.setTyping(text.isNotEmpty())
+                    },
+                    onSend = {
+                        if (inputText.isNotBlank()) {
+                            val editing = editingMessage
+                            if (editing != null) {
+                                viewModel.editMessage(editing.eventId, inputText.trim())
+                                editingMessage = null
+                            } else {
+                                viewModel.sendMessage(inputText.trim())
+                            }
+                            inputText = ""
+                            viewModel.setTyping(false)
+                        }
+                    }
+                )
+            }
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
-                isLoading && messages.isEmpty() -> {
+                isLoading && messages.isEmpty() ->
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
-                }
-                error != null && messages.isEmpty() -> {
+
+                error != null && messages.isEmpty() ->
                     Column(
                         modifier = Modifier.align(Alignment.Center),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -137,25 +199,24 @@ fun ChatScreen(
                         Text("Failed to load messages", color = MaterialTheme.colorScheme.error)
                         Button(onClick = { viewModel.retryMessages() }) { Text("Retry") }
                     }
-                }
-                messages.isEmpty() -> {
+
+                messages.isEmpty() ->
                     Text(
-                        text = "No messages yet",
+                        "No messages yet",
                         modifier = Modifier.align(Alignment.Center),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-                else -> {
+
+                else ->
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                         contentPadding = PaddingValues(vertical = 8.dp)
                     ) {
-                        // "Load earlier" button shown at top when there may be older messages
                         if (messages.size >= messageCount) {
                             item("load-earlier") {
-                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                                     TextButton(onClick = { viewModel.loadMoreMessages() }) {
                                         Text("Load earlier messages")
                                     }
@@ -163,20 +224,84 @@ fun ChatScreen(
                             }
                         }
                         items(messages, key = { it.eventId }) { message ->
+                            val isOwn = message.senderId == currentUserId
+                            // Find the quoted message for replies
+                            val replySource = message.replyToEventId
+                                ?.let { id -> messages.find { it.eventId == id } }
+
                             MessageBubble(
                                 message = message,
-                                isOwnMessage = message.senderId == currentUserId
+                                isOwnMessage = isOwn,
+                                replySource = replySource,
+                                onReply = { viewModel.setReplyingTo(message) },
+                                onEdit = if (isOwn) ({ editingMessage = message }) else null,
+                                onDelete = if (isOwn) ({ viewModel.deleteMessage(message.eventId) }) else null,
                             )
                         }
                     }
-                }
             }
         }
     }
 }
 
+// ── Reply / Edit bar ──────────────────────────────────────────────────────────
+
 @Composable
-fun MessageBubble(message: MessageInfo, isOwnMessage: Boolean) {
+private fun ReplyEditBar(
+    replyingTo: MessageInfo?,
+    editingMessage: MessageInfo?,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                if (editingMessage != null) Icons.Default.Edit else Icons.AutoMirrored.Filled.Reply,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (editingMessage != null) "Editing message" else
+                        "Replying to ${replyingTo?.senderId?.removePrefix("@")?.substringBefore(":")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = (editingMessage ?: replyingTo)?.body ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+// ── Message bubble ────────────────────────────────────────────────────────────
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MessageBubble(
+    message: MessageInfo,
+    isOwnMessage: Boolean,
+    replySource: MessageInfo?,
+    onReply: () -> Unit,
+    onEdit: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+) {
     val alignment = if (isOwnMessage) Alignment.End else Alignment.Start
     val bubbleColor = if (isOwnMessage)
         MaterialTheme.colorScheme.primaryContainer
@@ -186,12 +311,14 @@ fun MessageBubble(message: MessageInfo, isOwnMessage: Boolean) {
         MaterialTheme.colorScheme.onPrimaryContainer
     else
         MaterialTheme.colorScheme.onSurfaceVariant
-    val bubbleShape = RoundedCornerShape(
-        topStart = if (isOwnMessage) 16.dp else 4.dp,
-        topEnd   = if (isOwnMessage) 4.dp else 16.dp,
+    val shape = RoundedCornerShape(
+        topStart    = if (isOwnMessage) 16.dp else 4.dp,
+        topEnd      = if (isOwnMessage) 4.dp else 16.dp,
         bottomStart = 16.dp,
         bottomEnd   = 16.dp,
     )
+
+    var menuVisible by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
         if (!isOwnMessage) {
@@ -203,24 +330,86 @@ fun MessageBubble(message: MessageInfo, isOwnMessage: Boolean) {
             )
         }
 
-        Surface(
-            shape = bubbleShape,
-            color = bubbleColor,
-            modifier = Modifier.widthIn(max = 280.dp)
-        ) {
-            when (message.type) {
-                MessageType.Text -> Text(
-                    text = message.body,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = textColor,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        Box {
+            Surface(
+                shape = shape,
+                color = bubbleColor,
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { menuVisible = true }
+                    )
+            ) {
+                Column {
+                    // Quoted reply
+                    if (replySource != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.4f),
+                            shape = RoundedCornerShape(
+                                topStart    = if (isOwnMessage) 16.dp else 4.dp,
+                                topEnd      = if (isOwnMessage) 4.dp else 16.dp,
+                                bottomStart = 0.dp,
+                                bottomEnd   = 0.dp,
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp, 6.dp)) {
+                                Text(
+                                    text = replySource.senderId.removePrefix("@").substringBefore(":"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Text(
+                                    text = replySource.body,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = textColor.copy(alpha = 0.7f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = textColor.copy(alpha = 0.15f))
+                    }
+
+                    // Main content
+                    when (message.type) {
+                        MessageType.Text -> Text(
+                            text = message.body,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = textColor,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                        MessageType.Image -> ImageBubbleContent(message, textColor)
+                        MessageType.File,
+                        MessageType.Audio,
+                        MessageType.Video -> MediaFileBubbleContent(message, textColor)
+                    }
+                }
+            }
+
+            // Context menu
+            DropdownMenu(expanded = menuVisible, onDismissRequest = { menuVisible = false }) {
+                DropdownMenuItem(
+                    text = { Text("Reply") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
+                    onClick = { menuVisible = false; onReply() }
                 )
-
-                MessageType.Image -> ImageBubbleContent(message, textColor)
-
-                MessageType.File,
-                MessageType.Audio,
-                MessageType.Video -> MediaFileBubbleContent(message, textColor)
+                if (onEdit != null) {
+                    DropdownMenuItem(
+                        text = { Text("Edit") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null) },
+                        onClick = { menuVisible = false; onEdit() }
+                    )
+                }
+                if (onDelete != null) {
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null,
+                            tint = MaterialTheme.colorScheme.error) },
+                        onClick = { menuVisible = false; onDelete() }
+                    )
+                }
             }
         }
 
@@ -233,49 +422,35 @@ fun MessageBubble(message: MessageInfo, isOwnMessage: Boolean) {
     }
 }
 
+// ── Media content ─────────────────────────────────────────────────────────────
+
 @Composable
-private fun ImageBubbleContent(message: MessageInfo, textColor: androidx.compose.ui.graphics.Color) {
+private fun ImageBubbleContent(
+    message: MessageInfo,
+    textColor: androidx.compose.ui.graphics.Color,
+) {
     val ctx = LocalPlatformContext.current
     if (message.mediaUrl != null) {
         SubcomposeAsyncImage(
-            model = ImageRequest.Builder(ctx)
-                .data(message.mediaUrl)
-                .crossfade(true)
-                .build(),
+            model = ImageRequest.Builder(ctx).data(message.mediaUrl).crossfade(true).build(),
             contentDescription = message.fileName ?: "Image",
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .widthIn(max = 240.dp)
                 .height(180.dp)
                 .clip(RoundedCornerShape(12.dp)),
-            error = {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.BrokenImage, contentDescription = null,
-                        tint = textColor, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(message.fileName ?: "Image", color = textColor,
-                        style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            error = { MediaFallbackRow(Icons.Default.BrokenImage, message.fileName ?: "Image", textColor) }
         )
     } else {
-        // Encrypted or URL-less image — show placeholder
-        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.BrokenImage, contentDescription = null,
-                tint = textColor, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(message.fileName ?: "Image", color = textColor,
-                style = MaterialTheme.typography.bodySmall)
-        }
+        MediaFallbackRow(Icons.Default.BrokenImage, message.fileName ?: "Image", textColor)
     }
 }
 
 @Composable
-private fun MediaFileBubbleContent(message: MessageInfo, textColor: androidx.compose.ui.graphics.Color) {
+private fun MediaFileBubbleContent(
+    message: MessageInfo,
+    textColor: androidx.compose.ui.graphics.Color,
+) {
     val icon = when (message.type) {
         MessageType.Audio -> Icons.Default.AudioFile
         MessageType.Video -> Icons.Default.VideoFile
@@ -293,36 +468,33 @@ private fun MediaFileBubbleContent(message: MessageInfo, textColor: androidx.com
                 style = MaterialTheme.typography.bodyMedium,
                 color = textColor,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             message.fileSize?.let {
-                Text(
-                    text = formatFileSize(it),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = textColor.copy(alpha = 0.7f)
-                )
+                Text(formatFileSize(it), style = MaterialTheme.typography.labelSmall,
+                    color = textColor.copy(alpha = 0.7f))
             }
         }
     }
 }
 
-private fun formatTimestamp(epochMs: Long): String {
-    val tz = TimeZone.currentSystemDefault()
-    val now = Clock.System.now().toLocalDateTime(tz)
-    val local = Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(tz)
-    val time = "${local.hour.toString().padStart(2, '0')}:${local.minute.toString().padStart(2, '0')}"
-    val daysDiff = now.date.toEpochDays() - local.date.toEpochDays()
-    return when {
-        daysDiff == 0 -> time
-        daysDiff == 1 -> "Yesterday $time"
-        else -> "${local.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }} ${local.dayOfMonth} $time"
+@Composable
+private fun MediaFallbackRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    textColor: androidx.compose.ui.graphics.Color,
+) {
+    Row(
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = textColor, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = textColor, style = MaterialTheme.typography.bodySmall)
     }
 }
 
-private fun formatFileSize(bytes: Int): String = when {
-    bytes < 1_024       -> "$bytes B"
-    bytes < 1_048_576   -> "${bytes / 1_024} KB"
-    else                -> "${"%.1f".format(bytes / 1_048_576.0)} MB"
-}
+// ── Input bar ─────────────────────────────────────────────────────────────────
 
 @Composable
 fun MessageInput(text: String, onTextChange: (String) -> Unit, onSend: () -> Unit) {
@@ -341,17 +513,36 @@ fun MessageInput(text: String, onTextChange: (String) -> Unit, onSend: () -> Uni
                 maxLines = 4,
                 shape = RoundedCornerShape(24.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(Modifier.width(8.dp))
             IconButton(onClick = onSend, enabled = text.isNotBlank()) {
                 Icon(
                     Icons.AutoMirrored.Filled.Send,
                     contentDescription = "Send",
-                    tint = if (text.isNotBlank())
-                        MaterialTheme.colorScheme.primary
-                    else
-                        MaterialTheme.colorScheme.outline
+                    tint = if (text.isNotBlank()) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline
                 )
             }
         }
     }
+}
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+private fun formatTimestamp(epochMs: Long): String {
+    val tz = TimeZone.currentSystemDefault()
+    val now = Clock.System.now().toLocalDateTime(tz)
+    val local = Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(tz)
+    val time = "${local.hour.toString().padStart(2,'0')}:${local.minute.toString().padStart(2,'0')}"
+    val daysDiff = now.date.toEpochDays() - local.date.toEpochDays()
+    return when {
+        daysDiff == 0 -> time
+        daysDiff == 1 -> "Yesterday $time"
+        else -> "${local.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }} ${local.dayOfMonth} $time"
+    }
+}
+
+internal fun formatFileSize(bytes: Int): String = when {
+    bytes < 1_024     -> "$bytes B"
+    bytes < 1_048_576 -> "${bytes / 1_024} KB"
+    else              -> "${"%.1f".format(bytes / 1_048_576.0)} MB"
 }
