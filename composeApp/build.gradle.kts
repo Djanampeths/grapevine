@@ -31,6 +31,8 @@ kotlin {
             implementation(libs.compose.uiToolingPreview)
             implementation(libs.androidx.lifecycle.viewmodelCompose)
             implementation(libs.androidx.lifecycle.runtimeCompose)
+            implementation(libs.coil.compose)
+            implementation(libs.coil.network.ktor2)
             implementation(libs.trixnity.client)
             implementation(libs.trixnity.client.media.okio)
             implementation(libs.okio)
@@ -54,6 +56,8 @@ kotlin {
             // is included in the desktop run task's runtime classpath.
             implementation(libs.trixnity.client)
             implementation(libs.trixnity.client.media.okio)
+            implementation(libs.trixnity.client.repository.exposed)
+            implementation(libs.h2.database)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.content.negotiation)
             implementation(libs.ktor.serialization.json)
@@ -102,6 +106,8 @@ dependencies {
 compose.desktop {
     application {
         mainClass = "com.grapevine.grapevine.MainKt"
+
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
 
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)

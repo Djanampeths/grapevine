@@ -5,6 +5,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.grapevine.grapevine.matrix.LoginState
 import com.grapevine.grapevine.matrix.MatrixViewModel
 import com.grapevine.grapevine.ui.ChatScreen
+import com.grapevine.grapevine.ui.GrapevineTheme
 import com.grapevine.grapevine.ui.LoginScreen
 import com.grapevine.grapevine.ui.RoomListScreen
 import net.folivo.trixnity.core.model.RoomId
@@ -19,6 +20,7 @@ sealed class Screen {
 
 @Composable
 fun App() {
+    GrapevineTheme {
     val viewModel = viewModel { MatrixViewModel() }
     val loginState by viewModel.loginState.collectAsState()
 
@@ -52,9 +54,10 @@ fun App() {
             viewModel = viewModel,
             roomName = s.roomName,
             onBack = {
-                viewModel.stopPolling()
+                viewModel.stopMessages()
                 screen = Screen.RoomList
             }
         )
-    }
+    } // when
+    } // GrapevineTheme
 }

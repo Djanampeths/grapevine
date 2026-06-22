@@ -1,12 +1,33 @@
 package com.grapevine.grapevine.ui
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,7 +46,6 @@ fun RoomListScreen(
 ) {
     val loginState by viewModel.loginState.collectAsState()
     val rooms by viewModel.rooms.collectAsState()
-
     val userId = (loginState as? LoginState.LoggedIn)?.userId
 
     Scaffold(
@@ -33,9 +53,7 @@ fun RoomListScreen(
             TopAppBar(
                 title = { Text("Grapevine") },
                 actions = {
-                    TextButton(onClick = onLogout) {
-                        Text("Logout")
-                    }
+                    TextButton(onClick = onLogout) { Text("Logout") }
                 }
             )
         }
@@ -44,7 +62,8 @@ fun RoomListScreen(
             userId?.let {
                 Text(
                     text = it,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    // start=16, top=8, end=16, bottom=8
+                    modifier = Modifier.padding(16.dp, 8.dp, 16.dp, 8.dp),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -53,7 +72,6 @@ fun RoomListScreen(
             HorizontalDivider()
 
             if (rooms.isEmpty()) {
-                // Show a loading indicator while sync hasn't delivered rooms yet
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         CircularProgressIndicator()
@@ -63,14 +81,8 @@ fun RoomListScreen(
                 }
             } else {
                 LazyColumn {
-                    // `items` is a Compose extension on LazyListScope that takes a List
                     items(rooms, key = { it.id.full }) { room ->
-                        RoomItem(
-                            room = room,
-                            onClick = {
-                                onRoomClick(room.id, room.name ?: "Unnamed Room")
-                            }
-                        )
+                        RoomItem(room = room, onClick = { onRoomClick(room.id, room.name ?: "Unnamed Room") })
                         HorizontalDivider()
                     }
                 }
@@ -79,6 +91,7 @@ fun RoomListScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RoomItem(room: RoomInfo, onClick: () -> Unit) {
     Row(
@@ -88,7 +101,6 @@ fun RoomItem(room: RoomInfo, onClick: () -> Unit) {
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Avatar: a circle with the first letter of the room name
         Surface(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.primaryContainer,
@@ -112,33 +124,29 @@ fun RoomItem(room: RoomInfo, onClick: () -> Unit) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            // `?.let { }` — only runs the block if the value is non-null (Kotlin null safety)
-            room.lastMessage?.let { last ->
+            val subtitle = room.lastMessage ?: room.topic
+            if (subtitle != null) {
                 Text(
-                    text = last,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            } ?: room.topic?.let { topic ->
-                Text(
-                    text = topic,
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            if (room.memberCount > 0) {
+                Text(
+                    text = "${room.memberCount} members",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
 
-        if (room.memberCount > 0) {
-            Text(
-                text = "${room.memberCount}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(start = 8.dp)
-            )
+        if (room.unreadCount > 0) {
+            BadgedBox(badge = {
+                Badge { Text(room.unreadCount.coerceAtMost(99).toString()) }
+            }) {}
         }
     }
 }
