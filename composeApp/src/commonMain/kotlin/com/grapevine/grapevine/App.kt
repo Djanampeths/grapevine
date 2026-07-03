@@ -5,9 +5,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.grapevine.grapevine.matrix.LoginState
 import com.grapevine.grapevine.matrix.MatrixViewModel
 import com.grapevine.grapevine.ui.ChatScreen
-import com.grapevine.grapevine.ui.CreateJoinRoomDialog
 import com.grapevine.grapevine.ui.GrapevineTheme
 import com.grapevine.grapevine.ui.LoginScreen
+import com.grapevine.grapevine.ui.ProfileScreen
 import com.grapevine.grapevine.ui.RoomInfoScreen
 import com.grapevine.grapevine.ui.RoomListScreen
 import net.folivo.trixnity.core.model.RoomId
@@ -17,6 +17,7 @@ sealed class Screen {
     object RoomList : Screen()
     data class Chat(val roomId: RoomId, val roomName: String) : Screen()
     data class RoomInfo(val roomName: String) : Screen()
+    object Profile : Screen()
 }
 
 @Composable
@@ -47,7 +48,13 @@ fun App() {
                 onLogout = {
                     viewModel.logout()
                     screen = Screen.Login
-                }
+                },
+                onOpenProfile = { screen = Screen.Profile }
+            )
+
+            Screen.Profile -> ProfileScreen(
+                viewModel = viewModel,
+                onBack = { screen = Screen.RoomList }
             )
 
             is Screen.Chat -> ChatScreen(

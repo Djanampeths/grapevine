@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -68,13 +70,11 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.grapevine.grapevine.matrix.LoginState
 import com.grapevine.grapevine.matrix.MatrixViewModel
+import com.grapevine.grapevine.matrix.MemberInfo
 import com.grapevine.grapevine.matrix.MessageInfo
+import com.grapevine.grapevine.matrix.MessageStatus
 import com.grapevine.grapevine.matrix.MessageType
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.datetime.Clock
-import kotlinx.datetime.Instant
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,7 +91,16 @@ fun ChatScreen(
     val messageCount  by viewModel.messageCount.collectAsState()
     val replyingTo    by viewModel.replyingTo.collectAsState()
     val typingUsers   by viewModel.typingUsers.collectAsState()
+    val roomMembers   by viewModel.roomMembers.collectAsState()
     val currentUserId = (loginState as? LoginState.LoggedIn)?.userId
+
+    val memberByUserId: Map<String, MemberInfo> = remember(roomMembers) {
+        roomMembers.associateBy { it.userId }
+    }
+
+    val pickFile = rememberFilePicker { file ->
+        if (file != null) viewModel.sendMedia(file.bytes, file.name, file.mimeType)
+    }
 
     var inputText by remember { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<MessageInfo?>(null) }
@@ -180,7 +189,8 @@ fun ChatScreen(
                             inputText = ""
                             viewModel.setTyping(false)
                         }
-                    }
+                    },
+                    onAttach = pickFile,
                 )
             }
         }
@@ -225,14 +235,15 @@ fun ChatScreen(
                         }
                         items(messages, key = { it.eventId }) { message ->
                             val isOwn = message.senderId == currentUserId
-                            // Find the quoted message for replies
                             val replySource = message.replyToEventId
                                 ?.let { id -> messages.find { it.eventId == id } }
+                            val senderMember = memberByUserId[message.senderId]
 
                             MessageBubble(
                                 message = message,
                                 isOwnMessage = isOwn,
                                 replySource = replySource,
+                                senderMember = senderMember,
                                 onReply = { viewModel.setReplyingTo(message) },
                                 onEdit = if (isOwn) ({ editingMessage = message }) else null,
                                 onDelete = if (isOwn) ({ viewModel.deleteMessage(message.eventId) }) else null,
@@ -298,6 +309,7 @@ fun MessageBubble(
     message: MessageInfo,
     isOwnMessage: Boolean,
     replySource: MessageInfo?,
+    senderMember: MemberInfo? = null,
     onReply: () -> Unit,
     onEdit: (() -> Unit)?,
     onDelete: (() -> Unit)?,
@@ -322,12 +334,19 @@ fun MessageBubble(
 
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
         if (!isOwnMessage) {
-            Text(
-                text = message.senderId.removePrefix("@").substringBefore(":"),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
-            )
+            ) {
+                SenderAvatar(senderMember)
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = senderMember?.displayOrUser
+                        ?: message.senderId.removePrefix("@").substringBefore(":"),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
 
         Box {
@@ -384,6 +403,24 @@ fun MessageBubble(
                         MessageType.File,
                         MessageType.Audio,
                         MessageType.Video -> MediaFileBubbleContent(message, textColor)
+                        MessageType.Encrypted -> Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = textColor.copy(alpha = 0.6f),
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Encrypted message",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = textColor.copy(alpha = 0.6f),
+                                fontStyle = FontStyle.Italic,
+                            )
+                        }
                     }
                 }
             }
@@ -413,12 +450,32 @@ fun MessageBubble(
             }
         }
 
-        Text(
-            text = formatTimestamp(message.timestamp),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.padding(start = 4.dp, top = 2.dp, end = 4.dp)
-        )
+        Row(
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = formatTimestamp(message.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+            if (isOwnMessage) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = when (message.status) {
+                        MessageStatus.Sending -> "○"
+                        MessageStatus.Sent    -> "✓"
+                        MessageStatus.Failed  -> "✗"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when (message.status) {
+                        MessageStatus.Sending -> MaterialTheme.colorScheme.outline
+                        MessageStatus.Sent    -> MaterialTheme.colorScheme.primary
+                        MessageStatus.Failed  -> MaterialTheme.colorScheme.error
+                    },
+                )
+            }
+        }
     }
 }
 
@@ -494,10 +551,53 @@ private fun MediaFallbackRow(
     }
 }
 
+// ── Sender avatar ─────────────────────────────────────────────────────────────
+
+private const val SENDER_AVATAR_SIZE = 20
+
+@Composable
+private fun SenderAvatar(member: MemberInfo?) {
+    val ctx = LocalPlatformContext.current
+    val initials = (member?.displayOrUser ?: "?").firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    if (member?.avatarUrl != null) {
+        SubcomposeAsyncImage(
+            model = ImageRequest.Builder(ctx).data(member.avatarUrl).crossfade(true).build(),
+            contentDescription = member.displayOrUser,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(SENDER_AVATAR_SIZE.dp).clip(CircleShape),
+            error = { AvatarInitials(initials, SENDER_AVATAR_SIZE) },
+        )
+    } else {
+        AvatarInitials(initials, SENDER_AVATAR_SIZE)
+    }
+}
+
+@Composable
+private fun AvatarInitials(initial: String, size: Int) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        modifier = Modifier.size(size.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(
+                initial,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        }
+    }
+}
+
 // ── Input bar ─────────────────────────────────────────────────────────────────
 
 @Composable
-fun MessageInput(text: String, onTextChange: (String) -> Unit, onSend: () -> Unit) {
+fun MessageInput(
+    text: String,
+    onTextChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onAttach: () -> Unit = {},
+) {
     Surface(tonalElevation = 3.dp, modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -505,6 +605,13 @@ fun MessageInput(text: String, onTextChange: (String) -> Unit, onSend: () -> Uni
                 .navigationBarsPadding(),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            IconButton(onClick = onAttach) {
+                Icon(
+                    Icons.Default.AttachFile,
+                    contentDescription = "Attach file",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
@@ -529,15 +636,20 @@ fun MessageInput(text: String, onTextChange: (String) -> Unit, onSend: () -> Uni
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 private fun formatTimestamp(epochMs: Long): String {
-    val tz = TimeZone.currentSystemDefault()
-    val now = Clock.System.now().toLocalDateTime(tz)
-    val local = Instant.fromEpochMilliseconds(epochMs).toLocalDateTime(tz)
-    val time = "${local.hour.toString().padStart(2,'0')}:${local.minute.toString().padStart(2,'0')}"
-    val daysDiff = now.date.toEpochDays() - local.date.toEpochDays()
-    return when {
-        daysDiff == 0 -> time
-        daysDiff == 1 -> "Yesterday $time"
-        else -> "${local.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }} ${local.dayOfMonth} $time"
+    val h = (epochMs / 3_600_000 % 24).toInt()
+    val m = (epochMs / 60_000 % 60).toInt()
+    val time = "${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}"
+    val nowDays = System.currentTimeMillis() / 86_400_000
+    val msgDays = epochMs / 86_400_000
+    return when (nowDays - msgDays) {
+        0L -> time
+        1L -> "Yesterday $time"
+        else -> {
+            val day = (epochMs / 86_400_000 % 31 + 1).toInt()
+            val months = arrayOf("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")
+            val month = months[((epochMs / 2_629_800_000) % 12).toInt()]
+            "$month $day $time"
+        }
     }
 }
 

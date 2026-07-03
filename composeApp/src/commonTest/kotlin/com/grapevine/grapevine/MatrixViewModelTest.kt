@@ -1,8 +1,11 @@
 package com.grapevine.grapevine
 
 import com.grapevine.grapevine.matrix.LoginState
+import com.grapevine.grapevine.matrix.MemberInfo
 import com.grapevine.grapevine.matrix.MessageInfo
+import com.grapevine.grapevine.matrix.MessageType
 import com.grapevine.grapevine.matrix.RoomInfo
+import com.grapevine.grapevine.ui.formatFileSize
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -11,7 +14,10 @@ import kotlinx.coroutines.test.runTest
 import net.folivo.trixnity.core.model.RoomId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 // ---------------------------------------------------------------------------
@@ -141,19 +147,130 @@ class MatrixSessionTest {
 
     @Test
     fun `sealed class when is exhaustive`() {
-        // This test demonstrates why sealed classes beat enums for state:
-        // the compiler forces you to handle every case.
         val state: LoginState = LoginState.Loading
-
-        // `when` with a sealed class — if you add a new subclass and forget
-        // to handle it here, this won't compile.
         val description = when (state) {
             is LoginState.LoggedOut -> "not logged in"
             is LoginState.Loading   -> "logging in…"
             is LoginState.LoggedIn  -> "logged in as ${state.userId}"
             is LoginState.Error     -> "error: ${state.message}"
         }
-
         assertEquals("logging in…", description)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MessageInfo model tests
+// ---------------------------------------------------------------------------
+class MessageInfoTest {
+
+    @Test
+    fun `default message type is Text`() {
+        val msg = MessageInfo("evt1", "@alice:matrix.org", "Hello", 1000L)
+        assertEquals(MessageType.Text, msg.type)
+    }
+
+    @Test
+    fun `reply info is preserved`() {
+        val msg = MessageInfo(
+            eventId = "evt2",
+            senderId = "@bob:matrix.org",
+            body = "Reply text",
+            timestamp = 2000L,
+            replyToEventId = "evt1",
+        )
+        assertEquals("evt1", msg.replyToEventId)
+    }
+
+    @Test
+    fun `encrypted message type`() {
+        val msg = MessageInfo("evt3", "@carol:matrix.org", "🔒 Encrypted message", 3000L,
+            type = MessageType.Encrypted)
+        assertEquals(MessageType.Encrypted, msg.type)
+    }
+
+    @Test
+    fun `media message carries url and filename`() {
+        val msg = MessageInfo(
+            eventId = "evt4",
+            senderId = "@dave:matrix.org",
+            body = "photo.jpg",
+            timestamp = 4000L,
+            type = MessageType.Image,
+            mediaUrl = "https://matrix.org/_matrix/media/v3/download/matrix.org/abc123",
+            fileName = "photo.jpg",
+            mimeType = "image/jpeg",
+        )
+        assertEquals(MessageType.Image, msg.type)
+        assertNotNull(msg.mediaUrl)
+        assertEquals("photo.jpg", msg.fileName)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MemberInfo tests
+// ---------------------------------------------------------------------------
+class MemberInfoTest {
+
+    @Test
+    fun `displayOrUser returns displayName when set`() {
+        val member = MemberInfo("@alice:matrix.org", "Alice", null)
+        assertEquals("Alice", member.displayOrUser)
+    }
+
+    @Test
+    fun `displayOrUser falls back to localpart when displayName is null`() {
+        val member = MemberInfo("@alice:matrix.org", null, null)
+        assertEquals("alice", member.displayOrUser)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// formatFileSize utility tests
+// ---------------------------------------------------------------------------
+class FormatFileSizeTest {
+
+    @Test
+    fun `bytes under 1 KB displayed as B`() {
+        assertEquals("512 B", formatFileSize(512))
+    }
+
+    @Test
+    fun `1 KB displayed as KB`() {
+        assertEquals("1 KB", formatFileSize(1024))
+    }
+
+    @Test
+    fun `1 MB displayed as MB`() {
+        assertEquals("1.0 MB", formatFileSize(1_048_576))
+    }
+
+    @Test
+    fun `fractional MB displayed with one decimal`() {
+        assertEquals("1.5 MB", formatFileSize(1_572_864))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RoomInfo model tests
+// ---------------------------------------------------------------------------
+class RoomInfoTest {
+
+    @Test
+    fun `isDirect defaults to false`() {
+        val room = RoomInfo(RoomId("!room:matrix.org"), "Test", null, 5)
+        assertFalse(room.isDirect)
+    }
+
+    @Test
+    fun `isDirect flag is preserved`() {
+        val room = RoomInfo(RoomId("!dm:matrix.org"), "Alice", null, 2, isDirect = true)
+        assertTrue(room.isDirect)
+    }
+
+    @Test
+    fun `lastMessage and lastActivityMs default to null and zero`() {
+        val room = RoomInfo(RoomId("!room:matrix.org"), "Room", null, 10)
+        assertNull(room.lastMessage)
+        assertEquals(0L, room.lastActivityMs)
     }
 }

@@ -17,13 +17,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -56,12 +59,25 @@ fun RoomInfoScreen(
     onLeft: () -> Unit,
 ) {
     val members by viewModel.roomMembers.collectAsState()
+    val inviteError by viewModel.inviteError.collectAsState()
     var showLeaveConfirm by remember { mutableStateOf(false) }
+    var showInviteDialog by remember { mutableStateOf(false) }
 
     // Derive topic from current rooms list
     val currentRoomId by viewModel.currentRoomId.collectAsState()
     val rooms by viewModel.rooms.collectAsState()
     val roomInfo = rooms.find { it.id == currentRoomId }
+
+    if (showInviteDialog) {
+        InviteUserDialog(
+            error = inviteError,
+            onInvite = { userId ->
+                viewModel.clearInviteError()
+                viewModel.inviteUser(userId)
+            },
+            onDismiss = { showInviteDialog = false; viewModel.clearInviteError() },
+        )
+    }
 
     if (showLeaveConfirm) {
         AlertDialog(
@@ -96,6 +112,9 @@ fun RoomInfoScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showInviteDialog = true }) {
+                        Icon(Icons.Default.PersonAdd, contentDescription = "Invite user")
+                    }
                     IconButton(onClick = { showLeaveConfirm = true }) {
                         Icon(
                             Icons.AutoMirrored.Filled.ExitToApp,
@@ -210,6 +229,45 @@ private fun MemberRow(member: MemberInfo) {
             }
         }
     }
+}
+
+@Composable
+private fun InviteUserDialog(
+    error: String?,
+    onInvite: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var userId by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Invite user") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Enter the Matrix ID of the user to invite, e.g. @alice:matrix.org",
+                    style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(
+                    value = userId,
+                    onValueChange = { userId = it },
+                    label = { Text("Matrix ID") },
+                    placeholder = { Text("@user:server.org") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onInvite(userId.trim()) },
+                enabled = userId.isNotBlank(),
+            ) { Text("Invite") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
