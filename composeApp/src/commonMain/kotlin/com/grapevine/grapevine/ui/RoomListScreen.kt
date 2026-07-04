@@ -155,7 +155,7 @@ fun RoomListScreen(
                 is SecurityStatus.NeedVerification ->
                     SecurityBanner(
                         icon = Icons.Default.Shield,
-                        message = "Session unverified — Element may show security warnings",
+                        message = "Session unverified",
                         actionLabel = "Verify",
                         containerColor = MaterialTheme.colorScheme.errorContainer,
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
