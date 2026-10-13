@@ -1,4 +1,4 @@
-This is a Kotlin Multiplatform project targeting Android, Desktop (JVM).
+Grapevine is a Kotlin Multiplatform project targeting Android, Desktop (JVM).
 
 * [/composeApp](./composeApp/src) is for code that will be shared across your Compose Multiplatform applications.
   It contains several subfolders:
